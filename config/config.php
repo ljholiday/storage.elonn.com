@@ -23,7 +23,6 @@ return [
         'resource_path' => storage_path_config('STORAGE_RESOURCE_PATH', BASE_PATH . '/storage/resources'),
     ],
     'service_auth' => [
-        'mind.elonn' => storage_string_config('ELONN_MIND_SERVICE_TOKEN'),
         'paint.elonn' => storage_string_config('ELONN_PAINT_SERVICE_TOKEN'),
         'admin.elonn' => storage_string_config('ELONN_ADMIN_SERVICE_TOKEN'),
     ],

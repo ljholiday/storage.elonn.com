@@ -17,6 +17,7 @@ final class StorageSecurityTest
         echo "Running storage security tests...\n\n";
         $this->testBearerTokenAuthenticatesService();
         $this->testMismatchedTokenFails();
+        $this->testStorageDoesNotAcceptDirectMindToken();
         $this->report();
     }
 
@@ -52,6 +53,26 @@ final class StorageSecurityTest
         }
 
         $this->fail('Mismatched service token authenticated.');
+    }
+
+    private function testStorageDoesNotAcceptDirectMindToken(): void
+    {
+        echo "Testing Storage service auth does not expose direct Mind token... ";
+        $root = dirname(__DIR__);
+        $config = file_get_contents($root . '/config/config.php');
+        $envExample = file_get_contents($root . '/.env.example');
+
+        if (is_string($config)
+            && is_string($envExample)
+            && !str_contains($config, 'ELONN_MIND_SERVICE_TOKEN')
+            && !str_contains($config, "'mind.elonn'")
+            && !str_contains($envExample, 'ELONN_MIND_SERVICE_TOKEN')
+        ) {
+            $this->pass('Storage only documents direct callers that currently use it.');
+            return;
+        }
+
+        $this->fail('Storage still exposes a direct Mind service token.');
     }
 
     /** @param array<string, string> $headers */
