@@ -1,0 +1,3 @@
+.env
+storage/resources/*
+!storage/resources/.gitkeep
