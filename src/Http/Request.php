@@ -70,6 +70,11 @@ final class Request
         return (string) ($this->headers[strtolower($name)] ?? $default);
     }
 
+    public function query(string $name, string $default = ''): string
+    {
+        return (string) ($this->query[$name] ?? $default);
+    }
+
     /** @return array<string, mixed> */
     public function parsedBody(): array
     {

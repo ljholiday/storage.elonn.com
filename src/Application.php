@@ -100,6 +100,26 @@ final class Application
             return $this->writeResource($request, $service, $params['id'] ?? null);
         });
 
+        $this->router->get('/resources', function (Request $request): Response {
+            if ($this->authenticatedService($request) === null) {
+                return $this->serviceAuthFailure();
+            }
+
+            $owner = trim((string) $request->query('owner'));
+            if ($owner === '') {
+                return Response::json(['error' => 'owner query parameter is required.'], 422);
+            }
+
+            try {
+                return Response::json(['resources' => $this->store()->listByOwner($owner)]);
+            } catch (InvalidArgumentException $exception) {
+                return Response::json(['error' => $exception->getMessage()], 422);
+            } catch (Throwable $throwable) {
+                error_log('[storage] list failed: ' . $throwable->getMessage());
+                return Response::json(['error' => 'Unable to list Resources.'], 500);
+            }
+        });
+
         $this->router->get('/resources/{id}/metadata', function (Request $request, array $params): Response {
             if ($this->authenticatedService($request) === null) {
                 return $this->serviceAuthFailure();

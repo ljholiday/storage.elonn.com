@@ -32,7 +32,15 @@ final class ResourceStore
             throw new InvalidArgumentException('Replacement Resource id is invalid.');
         }
 
-        $id = $this->newResourceId();
+        $sha256 = hash('sha256', $bytes);
+        $id = $this->newResourceId($sha256);
+        $existing = $this->findAnyRow($id);
+        if ($existing !== null && $existing['status'] === 'active') {
+            // Identical content already has this address; the address is the content, so no new
+            // Resource is created.
+            return $this->canonical($existing);
+        }
+
         $storageKey = $this->storageKey($id);
         $path = $this->absolutePath($storageKey);
         $directory = dirname($path);
@@ -48,31 +56,69 @@ final class ResourceStore
             'id' => $id,
             'media_type' => $mediaType,
             'byte_length' => strlen($bytes),
-            'sha256' => hash('sha256', $bytes),
+            'sha256' => $sha256,
             'owner' => $owner,
             'created_by_service' => $createdByService,
             'replaces_resource_id' => $replaces,
             'storage_key' => $storageKey,
             'status' => 'active',
-            'created_at' => $now,
+            'created_at' => $existing !== null ? (string) $existing['created_at'] : $now,
             'modified_at' => $now,
             'deleted_at' => null,
         ];
 
         try {
-            $stmt = $this->pdo->prepare(
-                'INSERT INTO storage_resources
-                    (id, media_type, byte_length, sha256, owner, created_by_service, replaces_resource_id, storage_key, status, created_at, modified_at, deleted_at)
-                 VALUES
-                    (:id, :media_type, :byte_length, :sha256, :owner, :created_by_service, :replaces_resource_id, :storage_key, :status, :created_at, :modified_at, :deleted_at)'
-            );
-            $stmt->execute($metadata);
+            if ($existing !== null) {
+                // Same content was previously deleted (unreferenced) and is now being stored again.
+                // The address is permanent identity for that content, so it's revived in place
+                // rather than colliding on a duplicate id. created_at/sha256 are left untouched -
+                // they describe the content, which hasn't changed.
+                $stmt = $this->pdo->prepare(
+                    'UPDATE storage_resources
+                     SET media_type = :media_type, byte_length = :byte_length, owner = :owner,
+                         created_by_service = :created_by_service, replaces_resource_id = :replaces_resource_id,
+                         storage_key = :storage_key, status = :status, modified_at = :modified_at, deleted_at = :deleted_at
+                     WHERE id = :id'
+                );
+                $stmt->execute([
+                    'media_type' => $metadata['media_type'],
+                    'byte_length' => $metadata['byte_length'],
+                    'owner' => $metadata['owner'],
+                    'created_by_service' => $metadata['created_by_service'],
+                    'replaces_resource_id' => $metadata['replaces_resource_id'],
+                    'storage_key' => $metadata['storage_key'],
+                    'status' => $metadata['status'],
+                    'modified_at' => $metadata['modified_at'],
+                    'deleted_at' => $metadata['deleted_at'],
+                    'id' => $metadata['id'],
+                ]);
+            } else {
+                $stmt = $this->pdo->prepare(
+                    'INSERT INTO storage_resources
+                        (id, media_type, byte_length, sha256, owner, created_by_service, replaces_resource_id, storage_key, status, created_at, modified_at, deleted_at)
+                     VALUES
+                        (:id, :media_type, :byte_length, :sha256, :owner, :created_by_service, :replaces_resource_id, :storage_key, :status, :created_at, :modified_at, :deleted_at)'
+                );
+                $stmt->execute($metadata);
+            }
         } catch (\Throwable $throwable) {
             @unlink($path);
             throw $throwable;
         }
 
         return $this->canonical($metadata);
+    }
+
+    /** @return list<array<string, mixed>> */
+    public function listByOwner(string $owner): array
+    {
+        $owner = $this->normalizeOwner($owner);
+        $stmt = $this->pdo->prepare(
+            'SELECT * FROM storage_resources WHERE owner = :owner AND status = :status ORDER BY created_at DESC'
+        );
+        $stmt->execute(['owner' => $owner, 'status' => 'active']);
+
+        return array_map(fn (array $row): array => $this->canonical($row), $stmt->fetchAll());
     }
 
     /** @return array<string, mixed>|null */
@@ -168,6 +214,20 @@ final class ResourceStore
         return is_array($row) ? $row : null;
     }
 
+    /** Looks up a Resource row regardless of status (active or deleted). @return array<string, mixed>|null */
+    private function findAnyRow(string $id): ?array
+    {
+        if (!$this->validResourceId($id)) {
+            return null;
+        }
+
+        $stmt = $this->pdo->prepare('SELECT * FROM storage_resources WHERE id = :id LIMIT 1');
+        $stmt->execute(['id' => $id]);
+        $row = $stmt->fetch();
+
+        return is_array($row) ? $row : null;
+    }
+
     /** @param array<string, mixed> $row @return array<string, mixed> */
     private function canonical(array $row): array
     {
@@ -216,19 +276,20 @@ final class ResourceStore
         return $service;
     }
 
-    private function newResourceId(): string
+    private function newResourceId(string $sha256): string
     {
-        return 'resource:' . bin2hex(random_bytes(16));
+        return 'storage.elonn:sha256:' . $sha256;
     }
 
     private function validResourceId(string $id): bool
     {
-        return preg_match('/^resource:[a-f0-9]{32}$/', $id) === 1;
+        return preg_match('/^resource:[a-f0-9]{32}$/', $id) === 1
+            || preg_match('/^storage\.elonn:sha256:[a-f0-9]{64}$/', $id) === 1;
     }
 
     private function storageKey(string $id): string
     {
-        $key = substr($id, strlen('resource:'));
+        $key = substr($id, strrpos($id, ':') + 1);
         return substr($key, 0, 2) . '/' . $key . '/original';
     }
 
