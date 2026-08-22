@@ -65,6 +65,38 @@ final class Application
             ], $ready ? 200 : 500);
         });
 
+        $this->router->get('/metrics', function (Request $request): Response {
+            $startedAt = microtime(true);
+            $caller = $this->authenticatedService($request);
+            if ($caller !== 'admin.elonn') {
+                return $this->serviceAuthFailure();
+            }
+
+            $database = 'error';
+            try {
+                $pdo = Database::pdo($this->config);
+                $pdo->query('SELECT 1');
+                $database = Database::schemaReady($pdo) ? 'connected' : 'schema_missing';
+            } catch (Throwable $throwable) {
+                error_log('[storage] /metrics database check failed: ' . $throwable->getMessage());
+            }
+
+            $resourcePath = (string) $this->config['storage']['resource_path'];
+            $resourceStorage = is_dir($resourcePath) && is_writable($resourcePath) ? 'connected' : 'error';
+
+            return Response::json([
+                'contract_version' => '1.0',
+                'service' => 'storage.elonn',
+                'status' => $database === 'connected' && $resourceStorage === 'connected' ? 'ok' : 'degraded',
+                'timestamp' => gmdate('Y-m-d\TH:i:s\Z'),
+                'response_time_ms' => round((microtime(true) - $startedAt) * 1000, 2),
+                'custom_metrics' => [
+                    'database' => $database,
+                    'resource_storage' => $resourceStorage,
+                ],
+            ]);
+        });
+
         $this->router->get('/', fn (): Response => Response::json([
             'service' => 'elonn_storage',
             'description' => 'Elonn Resource byte service.',
