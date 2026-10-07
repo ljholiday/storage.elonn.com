@@ -65,6 +65,69 @@ final class Application
             ], $ready ? 200 : 500);
         });
 
+        $this->router->get('/administrative-interface', function (Request $request): Response {
+            // canonical/administrative-interface.json: Storage's own administrative status and
+            // capability baseline, for Admin's observation only. configuration.mutable,
+            // diagnostics, and control.{restart,drain} are honestly reported as unavailable --
+            // Storage implements none of them yet. component_version is honestly empty --
+            // Storage has not yet published a Service Contract revision.
+            $caller = $this->authenticatedService($request);
+            if ($caller !== 'admin.elonn') {
+                return $this->serviceAuthFailure();
+            }
+
+            $checks = [];
+            $healthy = true;
+            try {
+                $pdo = Database::pdo($this->config);
+                $pdo->query('SELECT 1');
+                $schemaReady = Database::schemaReady($pdo);
+                $checks[] = ['name' => 'database', 'state' => 'healthy', 'detail' => 'Connection and SELECT 1 succeeded.'];
+                $checks[] = $schemaReady
+                    ? ['name' => 'schema', 'state' => 'healthy', 'detail' => 'Required schema is present.']
+                    : ['name' => 'schema', 'state' => 'unhealthy', 'detail' => 'Required schema is missing.'];
+                $healthy = $healthy && $schemaReady;
+            } catch (Throwable $throwable) {
+                $healthy = false;
+                $checks[] = ['name' => 'database', 'state' => 'unhealthy', 'detail' => $throwable->getMessage()];
+            }
+
+            $resourcePath = (string) ($this->config['storage']['resource_path'] ?? '');
+            $resourceWritable = $resourcePath !== '' && is_dir($resourcePath) && is_writable($resourcePath);
+            $checks[] = [
+                'name' => 'resource_path',
+                'state' => $resourceWritable ? 'healthy' : 'unhealthy',
+                'detail' => $resourceWritable ? 'Resource storage path is writable.' : 'Resource storage path is missing or not writable.',
+            ];
+            $healthy = $healthy && $resourceWritable;
+
+            return Response::json([
+                'component' => 'storage.elonn',
+                'component_version' => '',
+                'deployment_id' => '',
+                'status' => $healthy ? 'running' : 'degraded',
+                'health' => [
+                    'state' => $healthy ? 'healthy' : 'unhealthy',
+                    'checks' => $checks,
+                ],
+                'configuration' => [
+                    'inspectable' => [
+                        'database.name' => (string) ($this->config['database']['name'] ?? ''),
+                        'storage.resource_path' => $resourcePath,
+                    ],
+                    'mutable' => [],
+                ],
+                'maintenance' => ['state' => 'normal', 'reason' => ''],
+                'diagnostics' => ['available' => []],
+                'control' => [
+                    'restart' => ['state' => 'unavailable', 'reason' => 'Storage does not implement an administrative restart operation.'],
+                    'drain' => ['state' => 'unavailable', 'reason' => 'Storage does not implement an administrative drain operation.'],
+                ],
+                'observed_at' => gmdate('Y-m-d\TH:i:s\Z'),
+                'metadata' => (object) [],
+            ]);
+        });
+
         $this->router->get('/metrics', function (Request $request): Response {
             $startedAt = microtime(true);
             $caller = $this->authenticatedService($request);
